@@ -95,9 +95,13 @@ impl LlamaChatMessage {
 /// The Rope type that's used within the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RopeType {
+    /// Standard RoPE (Rotary Position Embedding)
     Norm,
+    /// GPT-NeoX style RoPE
     NeoX,
+    /// Multi-resolution RoPE
     MRope,
+    /// Vision-specific RoPE variant
     Vision,
 }
 
@@ -670,7 +674,7 @@ impl LlamaModel {
         &self,
         _: &LlamaBackend,
         params: LlamaContextParams,
-    ) -> Result<LlamaContext, LlamaContextLoadError> {
+    ) -> Result<LlamaContext<'_>, LlamaContextLoadError> {
         let context_params = params.context_params;
         let context = unsafe {
             llama_cpp_sys_2::llama_new_context_with_model(self.model.as_ptr(), context_params)
