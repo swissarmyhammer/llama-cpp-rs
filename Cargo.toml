@@ -6,6 +6,9 @@ members = [
   "examples/embeddings",
   "examples/simple",
   "examples/reranker",
+]
+# Exclude mtmd from default build due to llama.cpp CLI compilation issues
+exclude = [
   "examples/mtmd",
 ]
 
