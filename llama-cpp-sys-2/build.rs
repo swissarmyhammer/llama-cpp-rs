@@ -446,6 +446,10 @@ fn main() {
     config.define("LLAMA_BUILD_EXAMPLES", "OFF");
     config.define("LLAMA_BUILD_SERVER", "OFF");
     config.define("LLAMA_BUILD_TOOLS", "OFF");
+    // The unified `llama` binary (app/) links llama-server-impl/llama-cli-impl,
+    // which are only built when LLAMA_BUILD_SERVER is ON. We only need the
+    // libraries, so disable it (it defaults to ON for a standalone build).
+    config.define("LLAMA_BUILD_APP", "OFF");
     config.define("LLAMA_CURL", "OFF");
 
     if cfg!(feature = "mtmd") {
@@ -580,7 +584,7 @@ fn main() {
 
     if matches!(target_os, TargetOs::Linux)
         && target_triple.contains("aarch64")
-        && !env::var(format!("CARGO_FEATURE_{}", "native".to_uppercase())).is_ok()
+        && env::var(format!("CARGO_FEATURE_{}", "native".to_uppercase())).is_err()
     {
         // If the native feature is not enabled, we take off the native ARM64 support.
         // It is useful in docker environments where the native feature is not enabled.
