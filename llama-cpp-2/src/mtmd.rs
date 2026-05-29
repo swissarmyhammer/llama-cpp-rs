@@ -192,9 +192,7 @@ impl MtmdContext {
     #[must_use]
     pub fn decode_use_non_causal(&self, chunk: Option<&MtmdInputChunk>) -> bool {
         let chunk_ptr = chunk.map_or(std::ptr::null(), |c| c.chunk.as_ptr().cast_const());
-        unsafe {
-            llama_cpp_sys_2::mtmd_decode_use_non_causal(self.context.as_ptr(), chunk_ptr)
-        }
+        unsafe { llama_cpp_sys_2::mtmd_decode_use_non_causal(self.context.as_ptr(), chunk_ptr) }
     }
 
     /// Check whether the current model uses M-RoPE for `llama_decode`.

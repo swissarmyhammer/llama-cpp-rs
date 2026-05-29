@@ -36,9 +36,9 @@ pub struct LlamaLoraAdapter {
     pub(crate) lora_adapter: NonNull<llama_cpp_sys_2::llama_adapter_lora>,
 }
 
-/// A performance-friendly wrapper around [LlamaModel::chat_template] which is then
-/// fed into [LlamaModel::apply_chat_template] to convert a list of messages into an LLM
-/// prompt. Internally the template is stored as a CString to avoid round-trip conversions
+/// A performance-friendly wrapper around [`LlamaModel::chat_template`] which is then
+/// fed into [`LlamaModel::apply_chat_template`] to convert a list of messages into an LLM
+/// prompt. Internally the template is stored as a `CString` to avoid round-trip conversions
 /// within the FFI.
 #[derive(Eq, PartialEq, Clone, PartialOrd, Ord, Hash)]
 pub struct LlamaChatTemplate(CString);
@@ -46,21 +46,34 @@ pub struct LlamaChatTemplate(CString);
 impl LlamaChatTemplate {
     /// Create a new template from a string. This can either be the name of a llama.cpp [chat template](https://github.com/ggerganov/llama.cpp/blob/8a8c4ceb6050bd9392609114ca56ae6d26f5b8f5/src/llama-chat.cpp#L27-L61)
     /// like "chatml" or "llama3" or an actual Jinja template for llama.cpp to interpret.
+    ///
+    /// # Errors
+    ///
+    /// If `template` contains a null byte.
     pub fn new(template: &str) -> Result<Self, std::ffi::NulError> {
         Ok(Self(CString::new(template)?))
     }
 
     /// Accesses the template as a c string reference.
+    #[must_use]
     pub fn as_c_str(&self) -> &CStr {
         &self.0
     }
 
-    /// Attempts to convert the CString into a Rust str reference.
+    /// Attempts to convert the `CString` into a Rust str reference.
+    ///
+    /// # Errors
+    ///
+    /// If the template is not valid UTF-8.
     pub fn to_str(&self) -> Result<&str, Utf8Error> {
         self.0.to_str()
     }
 
     /// Convenience method to create an owned String.
+    ///
+    /// # Errors
+    ///
+    /// If the template is not valid UTF-8.
     pub fn to_string(&self) -> Result<String, Utf8Error> {
         self.to_str().map(str::to_string)
     }
@@ -95,13 +108,13 @@ impl LlamaChatMessage {
 /// The Rope type that's used within the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RopeType {
-    /// Standard RoPE (Rotary Position Embedding)
+    /// Standard `RoPE` (Rotary Position Embedding)
     Norm,
-    /// GPT-NeoX style RoPE
+    /// GPT-NeoX style `RoPE`
     NeoX,
-    /// Multi-resolution RoPE
+    /// Multi-resolution `RoPE`
     MRope,
-    /// Vision-specific RoPE variant
+    /// Vision-specific `RoPE` variant
     Vision,
 }
 
@@ -467,43 +480,62 @@ impl LlamaModel {
     }
 
     /// Returns the total size of all the tensors in the model in bytes.
+    #[must_use]
     pub fn size(&self) -> u64 {
         unsafe { llama_cpp_sys_2::llama_model_size(self.model.as_ptr()) }
     }
 
     /// Returns the number of parameters in the model.
+    #[must_use]
     pub fn n_params(&self) -> u64 {
         unsafe { llama_cpp_sys_2::llama_model_n_params(self.model.as_ptr()) }
     }
 
     /// Returns whether the model is a recurrent network (Mamba, RWKV, etc)
+    #[must_use]
     pub fn is_recurrent(&self) -> bool {
         unsafe { llama_cpp_sys_2::llama_model_is_recurrent(self.model.as_ptr()) }
     }
 
     /// Returns the number of layers within the model.
+    ///
+    /// # Panics
+    ///
+    /// If the layer count returned by llama.cpp does not fit into a `u32`. In practice this never
+    /// happens because the underlying field is a `uint32_t` despite the `int32_t` API signature.
+    #[must_use]
     pub fn n_layer(&self) -> u32 {
-        // It's never possible for this to panic because while the API interface is defined as an int32_t,
-        // the field it's accessing is a uint32_t.
         u32::try_from(unsafe { llama_cpp_sys_2::llama_model_n_layer(self.model.as_ptr()) }).unwrap()
     }
 
     /// Returns the number of attention heads within the model.
+    ///
+    /// # Panics
+    ///
+    /// If the head count returned by llama.cpp does not fit into a `u32`. In practice this never
+    /// happens because the underlying field is a `uint32_t` despite the `int32_t` API signature.
+    #[must_use]
     pub fn n_head(&self) -> u32 {
-        // It's never possible for this to panic because while the API interface is defined as an int32_t,
-        // the field it's accessing is a uint32_t.
         u32::try_from(unsafe { llama_cpp_sys_2::llama_model_n_head(self.model.as_ptr()) }).unwrap()
     }
 
     /// Returns the number of KV attention heads.
+    ///
+    /// # Panics
+    ///
+    /// If the head count returned by llama.cpp does not fit into a `u32`. In practice this never
+    /// happens because the underlying field is a `uint32_t` despite the `int32_t` API signature.
+    #[must_use]
     pub fn n_head_kv(&self) -> u32 {
-        // It's never possible for this to panic because while the API interface is defined as an int32_t,
-        // the field it's accessing is a uint32_t.
         u32::try_from(unsafe { llama_cpp_sys_2::llama_model_n_head_kv(self.model.as_ptr()) })
             .unwrap()
     }
 
     /// Get metadata value as a string by key name
+    ///
+    /// # Errors
+    ///
+    /// If `key` contains a null byte, or the metadata lookup fails.
     pub fn meta_val_str(&self, key: &str) -> Result<String, MetaValError> {
         let key_cstring = CString::new(key)?;
         let key_ptr = key_cstring.as_ptr();
@@ -522,11 +554,16 @@ impl LlamaModel {
     }
 
     /// Get the number of metadata key/value pairs
+    #[must_use]
     pub fn meta_count(&self) -> i32 {
         unsafe { llama_cpp_sys_2::llama_model_meta_count(self.model.as_ptr()) }
     }
 
     /// Get metadata key name by index
+    ///
+    /// # Errors
+    ///
+    /// If the metadata lookup fails or the returned value is not valid UTF-8.
     pub fn meta_key_by_index(&self, index: i32) -> Result<String, MetaValError> {
         extract_meta_string(
             |buf_ptr, buf_len| unsafe {
@@ -542,6 +579,10 @@ impl LlamaModel {
     }
 
     /// Get metadata value as a string by index
+    ///
+    /// # Errors
+    ///
+    /// If the metadata lookup fails or the returned value is not valid UTF-8.
     pub fn meta_val_str_by_index(&self, index: i32) -> Result<String, MetaValError> {
         extract_meta_string(
             |buf_ptr, buf_len| unsafe {
@@ -573,7 +614,7 @@ impl LlamaModel {
 
     /// Get chat template from model by name. If the name parameter is None, the default chat template will be returned.
     ///
-    /// You supply this into [Self::apply_chat_template] to get back a string with the appropriate template
+    /// You supply this into [`Self::apply_chat_template`] to get back a string with the appropriate template
     /// substitution applied to convert a list of messages into a prompt the LLM can use to complete
     /// the chat.
     ///
@@ -618,7 +659,11 @@ impl LlamaModel {
         params: &LlamaModelParams,
     ) -> Result<Self, LlamaModelLoadError> {
         let path = path.as_ref();
-        debug_assert!(Path::new(path).exists(), "{path:?} does not exist");
+        debug_assert!(
+            Path::new(path).exists(),
+            "{} does not exist",
+            path.display()
+        );
         let path = path
             .to_str()
             .ok_or(LlamaModelLoadError::PathToStrError(path.to_path_buf()))?;
@@ -643,7 +688,11 @@ impl LlamaModel {
         path: impl AsRef<Path>,
     ) -> Result<LlamaLoraAdapter, LlamaLoraAdapterInitError> {
         let path = path.as_ref();
-        debug_assert!(Path::new(path).exists(), "{path:?} does not exist");
+        debug_assert!(
+            Path::new(path).exists(),
+            "{} does not exist",
+            path.display()
+        );
 
         let path = path
             .to_str()
@@ -685,14 +734,14 @@ impl LlamaModel {
     }
 
     /// Apply the models chat template to some messages.
-    /// See https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
+    /// See <https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template>
     ///
-    /// Unlike the llama.cpp apply_chat_template which just randomly uses the ChatML template when given
+    /// Unlike the llama.cpp `apply_chat_template` which just randomly uses the `ChatML` template when given
     /// a null pointer for the template, this requires an explicit template to be specified. If you want to
     /// use "chatml", then just do `LlamaChatTemplate::new("chatml")` or any other model name or template
     /// string.
     ///
-    /// Use [Self::chat_template] to retrieve the template baked into the model (this is the preferred
+    /// Use [`Self::chat_template`] to retrieve the template baked into the model (this is the preferred
     /// mechanism as using the wrong chat template can result in really unexpected responses from the LLM).
     ///
     /// You probably want to set `add_ass` to true so that the generated template string ends with a the
@@ -768,13 +817,13 @@ where
     let mut buffer = vec![0u8; capacity];
 
     // call the foreign function
-    let result = c_function(buffer.as_mut_ptr() as *mut c_char, buffer.len());
+    let result = c_function(buffer.as_mut_ptr().cast::<c_char>(), buffer.len());
     if result < 0 {
         return Err(MetaValError::NegativeReturn(result));
     }
 
-    // check if the response fit in our buffer
-    let returned_len = result as usize;
+    // check if the response fit in our buffer (result is non-negative, checked above)
+    let returned_len = usize::try_from(result).expect("result is non-negative");
     if returned_len >= capacity {
         // buffer wasn't large enough, try again with the correct capacity.
         return extract_meta_string(c_function, returned_len + 1);

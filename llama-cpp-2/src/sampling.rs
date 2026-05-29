@@ -74,7 +74,7 @@ impl LlamaSampler {
     /// Gets the random seed used by this sampler.
     ///
     /// Returns:
-    /// - For random samplers (dist, mirostat, mirostat_v2): returns their current seed
+    /// - For random samplers (dist, mirostat, `mirostat_v2)`: returns their current seed
     /// - For sampler chains: returns the first non-default seed found in reverse order
     /// - For all other samplers: returns 0xFFFFFFFF
     #[must_use]
@@ -415,15 +415,15 @@ impl LlamaSampler {
     /// - ``n_vocab``: [`LlamaModel::n_vocab`]
     /// - ``seed``: Seed to initialize random generation with.
     /// - ``tau``: The target cross-entropy (or surprise) value you want to achieve for the
-    ///     generated text. A higher value corresponds to more surprising or less predictable text,
-    ///     while a lower value corresponds to less surprising or more predictable text.
+    ///   generated text. A higher value corresponds to more surprising or less predictable text,
+    ///   while a lower value corresponds to less surprising or more predictable text.
     /// - ``eta``: The learning rate used to update `mu` based on the error between the target and
-    ///     observed surprisal of the sampled word. A larger learning rate will cause `mu` to be
-    ///     updated more quickly, while a smaller learning rate will result in slower updates.
+    ///   observed surprisal of the sampled word. A larger learning rate will cause `mu` to be
+    ///   updated more quickly, while a smaller learning rate will result in slower updates.
     /// - ``m``: The number of tokens considered in the estimation of `s_hat`. This is an arbitrary
-    ///     value that is used to calculate `s_hat`, which in turn helps to calculate the value of `k`.
-    ///     In the paper, they use `m = 100`, but you can experiment with different values to see how
-    ///     it affects the performance of the algorithm.
+    ///   value that is used to calculate `s_hat`, which in turn helps to calculate the value of `k`.
+    ///   In the paper, they use `m = 100`, but you can experiment with different values to see how
+    ///   it affects the performance of the algorithm.
     #[must_use]
     pub fn mirostat(n_vocab: i32, seed: u32, tau: f32, eta: f32, m: i32) -> Self {
         let sampler =
@@ -436,11 +436,11 @@ impl LlamaSampler {
     /// # Parameters:
     /// - ``seed``: Seed to initialize random generation with.
     /// - ``tau``: The target cross-entropy (or surprise) value you want to achieve for the
-    ///     generated text. A higher value corresponds to more surprising or less predictable text,
-    ///     while a lower value corresponds to less surprising or more predictable text.
+    ///   generated text. A higher value corresponds to more surprising or less predictable text,
+    ///   while a lower value corresponds to less surprising or more predictable text.
     /// - ``eta``: The learning rate used to update `mu` based on the error between the target and
-    ///     observed surprisal of the sampled word. A larger learning rate will cause `mu` to be
-    ///     updated more quickly, while a smaller learning rate will result in slower updates.
+    ///   observed surprisal of the sampled word. A larger learning rate will cause `mu` to be
+    ///   updated more quickly, while a smaller learning rate will result in slower updates.
     #[must_use]
     pub fn mirostat_v2(seed: u32, tau: f32, eta: f32) -> Self {
         let sampler = unsafe { llama_cpp_sys_2::llama_sampler_init_mirostat_v2(seed, tau, eta) };
@@ -500,13 +500,16 @@ impl LlamaSampler {
     /// // Assuming vocab_size of 32000
     /// let sampler = LlamaSampler::logit_bias(32000, &biases);
     /// ```
+    /// # Panics
+    ///
+    /// If the number of biases does not fit into an `i32`.
     #[must_use]
     pub fn logit_bias(n_vocab: i32, biases: &[LlamaLogitBias]) -> Self {
         let data = biases.as_ptr().cast::<llama_cpp_sys_2::llama_logit_bias>();
+        let n_biases = i32::try_from(biases.len()).expect("number of biases exceeds i32::MAX");
 
-        let sampler = unsafe {
-            llama_cpp_sys_2::llama_sampler_init_logit_bias(n_vocab, biases.len() as i32, data)
-        };
+        let sampler =
+            unsafe { llama_cpp_sys_2::llama_sampler_init_logit_bias(n_vocab, n_biases, data) };
 
         Self { sampler }
     }

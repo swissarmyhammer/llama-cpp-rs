@@ -358,6 +358,7 @@ pub struct LogOptions {
 impl LogOptions {
     /// If enabled, logs are sent to tracing. If disabled, all logs are suppressed. Default is for
     /// logs to be sent to tracing.
+    #[must_use]
     pub fn with_logs_enabled(mut self, enabled: bool) -> Self {
         self.disabled = !enabled;
         self
@@ -413,13 +414,13 @@ pub fn send_logs_to_tracing(options: LogOptions) {
     // can't possibly interfere with each other. In other words, if llama.cpp emits a log without a trailing
     // newline and calls a GGML function, the logs won't be weirdly intermixed and instead we'll llama.cpp logs
     // will CONT previous llama.cpp logs and GGML logs will CONT previous ggml logs.
-    let llama_heap_state = Box::as_ref(
-        log::LLAMA_STATE
-            .get_or_init(|| Box::new(log::State::new(log::Module::LlamaCpp, options.clone()))),
-    ) as *const _;
-    let ggml_heap_state = Box::as_ref(
-        log::GGML_STATE.get_or_init(|| Box::new(log::State::new(log::Module::GGML, options))),
-    ) as *const _;
+    let llama_heap_state =
+        std::ptr::from_ref(Box::as_ref(log::LLAMA_STATE.get_or_init(|| {
+            Box::new(log::State::new(log::Module::LlamaCpp, options.clone()))
+        })));
+    let ggml_heap_state = std::ptr::from_ref(Box::as_ref(
+        log::GGML_STATE.get_or_init(|| Box::new(log::State::new(log::Module::Ggml, options))),
+    ));
 
     unsafe {
         // GGML has to be set after llama since setting llama sets ggml as well.

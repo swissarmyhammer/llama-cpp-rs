@@ -80,8 +80,7 @@ impl<'model> LlamaContext<'model> {
     ///
     /// - the returned [`std::ffi::c_int`] from llama-cpp does not fit into a i32 (this should never happen on most systems)
     pub fn decode(&mut self, batch: &mut LlamaBatch) -> Result<(), DecodeError> {
-        let result =
-            unsafe { llama_cpp_sys_2::llama_decode(self.context.as_ptr(), batch.llama_batch) };
+        let result = unsafe { llama_cpp_sys_2::llama_decode(self.context.as_ptr(), batch.inner) };
 
         match NonZeroI32::new(result) {
             None => {
@@ -103,8 +102,7 @@ impl<'model> LlamaContext<'model> {
     ///
     /// - the returned [`std::ffi::c_int`] from llama-cpp does not fit into a i32 (this should never happen on most systems)
     pub fn encode(&mut self, batch: &mut LlamaBatch) -> Result<(), EncodeError> {
-        let result =
-            unsafe { llama_cpp_sys_2::llama_encode(self.context.as_ptr(), batch.llama_batch) };
+        let result = unsafe { llama_cpp_sys_2::llama_encode(self.context.as_ptr(), batch.inner) };
 
         match NonZeroI32::new(result) {
             None => {
@@ -205,8 +203,8 @@ impl<'model> LlamaContext<'model> {
 
     /// Get the token data array for the last token in the context.
     ///
-    /// This is a convience method that implements:
-    /// ```ignore
+    /// This is a convenience method that implements:
+    /// ```text
     /// LlamaTokenDataArray::from_iter(ctx.candidates(), false)
     /// ```
     ///
@@ -256,8 +254,8 @@ impl<'model> LlamaContext<'model> {
 
     /// Get the token data array for the ith token in the context.
     ///
-    /// This is a convience method that implements:
-    /// ```ignore
+    /// This is a convenience method that implements:
+    /// ```text
     /// LlamaTokenDataArray::from_iter(ctx.candidates_ith(i), false)
     /// ```
     ///
@@ -322,9 +320,9 @@ impl<'model> LlamaContext<'model> {
         let err_code = unsafe {
             llama_cpp_sys_2::llama_set_adapters_lora(
                 self.context.as_ptr(),
-                &mut adapter_ptr,
+                &raw mut adapter_ptr,
                 1,
-                &mut scale,
+                &raw mut scale,
             )
         };
         if err_code != 0 {
