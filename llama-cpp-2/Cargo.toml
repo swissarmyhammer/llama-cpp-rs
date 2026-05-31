@@ -18,6 +18,9 @@ tracing-core = { workspace = true }
 [dev-dependencies]
 encoding_rs = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Used by the gated MTP round-trip test to install a capturing `llama_log_set`
+# callback and assert the missing-MTP-layers warning is absent.
+llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.123" }
 
 [features]
 default = ["openmp", "android-shared-stdcxx"]

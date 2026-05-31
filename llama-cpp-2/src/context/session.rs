@@ -21,6 +21,15 @@ pub enum SaveSessionError {
     PathToStrError(PathBuf),
 }
 
+/// Failed to restore a single sequence's state via [`LlamaContext::state_seq_set_data`].
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SetSeqStateError {
+    /// llama.cpp reported `0` bytes read, meaning the state could not be loaded
+    /// (e.g. the buffer is truncated, garbage, or incompatible with the context).
+    #[error("Failed to set sequence state from the provided bytes")]
+    FailedToSet,
+}
+
 /// Failed to load a Session file
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum LoadSessionError {
@@ -160,5 +169,69 @@ impl LlamaContext<'_> {
     /// help wanted: not entirely sure what the safety requirements are here.
     pub unsafe fn set_state_data(&mut self, src: &[u8]) -> usize {
         unsafe { llama_cpp_sys_2::llama_set_state_data(self.context.as_ptr(), src.as_ptr()) }
+    }
+
+    /// Returns the exact size in bytes needed to snapshot the state of a single
+    /// sequence (its `kv_cache` entries) via [`Self::state_seq_get_data`].
+    #[must_use]
+    pub fn state_seq_get_size(&self, seq_id: i32) -> usize {
+        unsafe { llama_cpp_sys_2::llama_state_seq_get_size(self.context.as_ptr(), seq_id) }
+    }
+
+    /// Snapshot the state of sequence `seq_id` into a freshly allocated `Vec<u8>`.
+    ///
+    /// The buffer is sized exactly to [`Self::state_seq_get_size`], so callers
+    /// cannot under-size it. Pair with [`Self::state_seq_set_data`] to restore.
+    #[must_use]
+    pub fn state_seq_get_data(&self, seq_id: i32) -> Vec<u8> {
+        let size = self.state_seq_get_size(seq_id);
+        let mut buf: Vec<u8> = Vec::with_capacity(size);
+        // SAFETY: `buf` has capacity for `size` bytes, and llama.cpp writes at
+        // most `size` bytes (the value it just reported via state_seq_get_size).
+        let written = unsafe {
+            llama_cpp_sys_2::llama_state_seq_get_data(
+                self.context.as_ptr(),
+                buf.as_mut_ptr(),
+                size,
+                seq_id,
+            )
+        };
+        // SAFETY: llama.cpp wrote `written` (<= size) initialized bytes.
+        unsafe {
+            buf.set_len(written);
+        }
+        buf
+    }
+
+    /// Restore a sequence state previously snapshotted by
+    /// [`Self::state_seq_get_data`] into `dest_seq_id`.
+    ///
+    /// Returns the number of bytes read on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SetSeqStateError::FailedToSet`] if llama.cpp reports `0` bytes
+    /// read, which happens when `src` is truncated, corrupt, or incompatible
+    /// with this context.
+    pub fn state_seq_set_data(
+        &mut self,
+        src: &[u8],
+        dest_seq_id: i32,
+    ) -> Result<usize, SetSeqStateError> {
+        // SAFETY: `src` is a valid slice of `src.len()` bytes; llama.cpp reads
+        // at most `src.len()` bytes from it.
+        let read = unsafe {
+            llama_cpp_sys_2::llama_state_seq_set_data(
+                self.context.as_ptr(),
+                src.as_ptr(),
+                src.len(),
+                dest_seq_id,
+            )
+        };
+        if read == 0 {
+            Err(SetSeqStateError::FailedToSet)
+        } else {
+            Ok(read)
+        }
     }
 }

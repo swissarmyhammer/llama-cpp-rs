@@ -88,6 +88,37 @@ impl From<LlamaPoolingType> for i32 {
     }
 }
 
+/// Context type. `Mtp` creates a context that runs the model's NextN/MTP head
+/// (for draft-mtp speculative decoding); requires a model with MTP layers.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LlamaContextType {
+    /// The default context type.
+    Default,
+    /// A context that runs the model's NextN/MTP head.
+    Mtp,
+}
+
+/// Create a `LlamaContextType` from a `llama_context_type` - returns
+/// `LlamaContextType::Default` if the value is not recognized.
+impl From<llama_cpp_sys_2::llama_context_type> for LlamaContextType {
+    fn from(value: llama_cpp_sys_2::llama_context_type) -> Self {
+        match value {
+            llama_cpp_sys_2::LLAMA_CONTEXT_TYPE_MTP => Self::Mtp,
+            _ => Self::Default,
+        }
+    }
+}
+
+/// Create a `llama_context_type` from a `LlamaContextType`.
+impl From<LlamaContextType> for llama_cpp_sys_2::llama_context_type {
+    fn from(value: LlamaContextType) -> Self {
+        match value {
+            LlamaContextType::Default => llama_cpp_sys_2::LLAMA_CONTEXT_TYPE_DEFAULT,
+            LlamaContextType::Mtp => llama_cpp_sys_2::LLAMA_CONTEXT_TYPE_MTP,
+        }
+    }
+}
+
 /// A rusty wrapper around `ggml_type` for KV cache types.
 #[allow(non_camel_case_types, missing_docs)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -655,6 +686,54 @@ impl LlamaContextParams {
         self.context_params.swa_full
     }
 
+    /// Set the number of recurrent-state snapshots per sequence kept for partial
+    /// rollback ([EXPERIMENTAL]).
+    ///
+    /// On models with recurrent or hybrid memory (gated delta net, RWKV, Mamba,
+    /// …), `llama_memory_seq_rm` for a partial range can only succeed if the
+    /// recurrent module retains per-token state snapshots covering the rolled-
+    /// back distance. `n_rs_seq` controls that window: setting it to `K` lets
+    /// partial removals roll back up to `K` positions. `0` (the default)
+    /// disables it and every partial `seq_rm` on a recurrent memory fails.
+    ///
+    /// Required for speculative decoding (draft-mtp, etc.) on hybrid attention +
+    /// recurrent architectures (Qwen3.5/3.6, …): set this to at least the per-
+    /// step draft budget so the verify's rejected drafts can be rolled back.
+    ///
+    /// llama.cpp clamps the value to `0` automatically on architectures whose
+    /// arch reports no recurrent-state rollback support, so it is safe to set
+    /// unconditionally — non-recurrent models pay no cost. Recurrent state is
+    /// tiny compared to attention KV, so memory scales as `mem_size * (1 +
+    /// n_rs_seq)` of a small baseline.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_2::context::params::LlamaContextParams;
+    /// let params = LlamaContextParams::default().with_n_rs_seq(4);
+    /// assert_eq!(params.n_rs_seq(), 4);
+    /// ```
+    #[must_use]
+    pub fn with_n_rs_seq(mut self, n_rs_seq: u32) -> Self {
+        self.context_params.n_rs_seq = n_rs_seq;
+        self
+    }
+
+    /// Get the number of recurrent-state snapshots per sequence kept for partial
+    /// rollback. See [`Self::with_n_rs_seq`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_2::context::params::LlamaContextParams;
+    /// let params = LlamaContextParams::default();
+    /// assert_eq!(params.n_rs_seq(), 0);
+    /// ```
+    #[must_use]
+    pub fn n_rs_seq(&self) -> u32 {
+        self.context_params.n_rs_seq
+    }
+
     /// Set the max number of sequences (i.e. distinct states for recurrent models)
     ///
     /// # Examples
@@ -735,6 +814,35 @@ impl LlamaContextParams {
     pub fn type_v(&self) -> KvCacheType {
         KvCacheType::from(self.context_params.type_v)
     }
+
+    /// Set the context type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_2::context::params::{LlamaContextParams, LlamaContextType};
+    /// let params = LlamaContextParams::default()
+    ///     .with_ctx_type(LlamaContextType::Mtp);
+    /// assert_eq!(params.ctx_type(), LlamaContextType::Mtp);
+    /// ```
+    #[must_use]
+    pub fn with_ctx_type(mut self, ctx_type: LlamaContextType) -> Self {
+        self.context_params.ctx_type = ctx_type.into();
+        self
+    }
+
+    /// Get the context type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// let params = llama_cpp_2::context::params::LlamaContextParams::default();
+    /// assert_eq!(params.ctx_type(), llama_cpp_2::context::params::LlamaContextType::Default);
+    /// ```
+    #[must_use]
+    pub fn ctx_type(&self) -> LlamaContextType {
+        LlamaContextType::from(self.context_params.ctx_type)
+    }
 }
 
 /// Default parameters for `LlamaContext`. (as defined in llama.cpp by `llama_context_default_params`)
@@ -749,5 +857,24 @@ impl Default for LlamaContextParams {
     fn default() -> Self {
         let context_params = unsafe { llama_cpp_sys_2::llama_context_default_params() };
         Self { context_params }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LlamaContextParams, LlamaContextType};
+
+    #[test]
+    fn default_ctx_type_is_default() {
+        assert_eq!(
+            LlamaContextParams::default().ctx_type(),
+            LlamaContextType::Default
+        );
+    }
+
+    #[test]
+    fn with_ctx_type_round_trips() {
+        let params = LlamaContextParams::default().with_ctx_type(LlamaContextType::Mtp);
+        assert_eq!(params.ctx_type(), LlamaContextType::Mtp);
     }
 }

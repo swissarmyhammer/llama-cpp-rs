@@ -261,10 +261,20 @@ fn main() {
     );
 
     // Bindings
+    //
+    // Clang args shared by every bindgen pass (the main C pass and the
+    // C++-mode pre-norm pass below). Both passes parse headers from the same
+    // llama.cpp tree, so they must see the same include paths and — on
+    // Android/cross builds — the same `--sysroot`/`--target`/NDK `-isystem`
+    // configuration, or they would parse against mismatched headers and ABIs.
+    let mut shared_clang_args: Vec<String> = vec![
+        format!("-I{}", llama_src.join("include").display()),
+        format!("-I{}", llama_src.join("ggml/include").display()),
+    ];
+
     let mut bindings_builder = bindgen::Builder::default()
         .header("wrapper.h")
-        .clang_arg(format!("-I{}", llama_src.join("include").display()))
-        .clang_arg(format!("-I{}", llama_src.join("ggml/include").display()))
+        .clang_args(&shared_clang_args)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .derive_partialeq(true)
         .allowlist_function("ggml_.*")
@@ -388,28 +398,32 @@ fn main() {
             })
         };
 
-        // Configure bindgen for Android
-        bindings_builder = bindings_builder
-            .clang_arg(format!("--sysroot={}", sysroot))
-            .clang_arg(format!("-D__ANDROID_API__={}", android_api))
-            .clang_arg("-D__ANDROID__");
+        // Configure bindgen for Android. These args are pushed onto the
+        // shared list so the pre-norm C++ pass picks up the same cross-compile
+        // sysroot/target/include configuration as the main pass. The main
+        // builder already received the base include args at construction, so
+        // only the args appended below are applied to it here.
+        let android_args_start = shared_clang_args.len();
+        shared_clang_args.push(format!("--sysroot={}", sysroot));
+        shared_clang_args.push(format!("-D__ANDROID_API__={}", android_api));
+        shared_clang_args.push("-D__ANDROID__".to_string());
 
         // Add include paths in correct order
         if let Some(ref builtin_includes) = clang_builtin_includes {
-            bindings_builder = bindings_builder
-                .clang_arg("-isystem")
-                .clang_arg(builtin_includes);
+            shared_clang_args.push("-isystem".to_string());
+            shared_clang_args.push(builtin_includes.clone());
         }
 
-        bindings_builder = bindings_builder
-            .clang_arg("-isystem")
-            .clang_arg(format!("{}/usr/include/{}", sysroot, android_target_prefix))
-            .clang_arg("-isystem")
-            .clang_arg(format!("{}/usr/include", sysroot))
-            .clang_arg("-include")
-            .clang_arg("stdbool.h")
-            .clang_arg("-include")
-            .clang_arg("stdint.h");
+        shared_clang_args.push("-isystem".to_string());
+        shared_clang_args.push(format!("{}/usr/include/{}", sysroot, android_target_prefix));
+        shared_clang_args.push("-isystem".to_string());
+        shared_clang_args.push(format!("{}/usr/include", sysroot));
+        shared_clang_args.push("-include".to_string());
+        shared_clang_args.push("stdbool.h".to_string());
+        shared_clang_args.push("-include".to_string());
+        shared_clang_args.push("stdint.h".to_string());
+
+        bindings_builder = bindings_builder.clang_args(&shared_clang_args[android_args_start..]);
 
         // Set additional clang args for cargo ndk compatibility
         if env::var("CARGO_SUBCOMMAND").as_deref() == Ok("ndk") {
@@ -430,7 +444,36 @@ fn main() {
         .write_to_file(bindings_path)
         .expect("Failed to write bindings");
 
+    // Second bindgen pass, in C++ mode, for the pre-norm shim.
+    //
+    // The pre-norm functions are declared in `llama-ext.h` WITHOUT an
+    // `extern "C"` block, so they are compiled into libllama with C++
+    // (mangled) linkage. A normal C-mode binding would emit an `extern "C"`
+    // FFI declaration that cannot resolve against the mangled symbol at link
+    // time. Parsing `wrapper_ext.h` as C++ makes bindgen emit the correct
+    // mangled `#[link_name = "..."]`, so the canonical Rust names
+    // (`llama_set_embeddings_pre_norm`, etc.) link against the existing C++
+    // symbols. `allowlist_recursively(false)` keeps this pass from re-emitting
+    // `llama_context` and other shared types — those come from `bindings.rs`,
+    // which is included first in lib.rs.
+    let ext_bindings = bindgen::Builder::default()
+        .header("wrapper_ext.h")
+        .clang_args(&shared_clang_args)
+        .clang_arg("-x")
+        .clang_arg("c++")
+        .allowlist_function("llama_(set|get)_embeddings_pre_norm.*")
+        .allowlist_recursively(false)
+        .prepend_enum_name(false)
+        .generate()
+        .expect("Failed to generate pre-norm ext bindings");
+
+    let ext_bindings_path = out_dir.join("bindings_ext.rs");
+    ext_bindings
+        .write_to_file(ext_bindings_path)
+        .expect("Failed to write pre-norm ext bindings");
+
     println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-changed=wrapper_ext.h");
     println!("cargo:rerun-if-changed=wrapper_mtmd.h");
 
     debug_log!("Bindings Created");

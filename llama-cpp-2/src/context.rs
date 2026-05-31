@@ -7,6 +7,7 @@ use std::slice;
 
 use crate::llama_batch::LlamaBatch;
 use crate::model::{LlamaLoraAdapter, LlamaModel};
+use crate::sampling::LlamaSampler;
 use crate::timing::LlamaTimings;
 use crate::token::data::LlamaTokenData;
 use crate::token::data_array::LlamaTokenDataArray;
@@ -17,6 +18,7 @@ use crate::{
 };
 
 pub mod kv_cache;
+pub mod mtp;
 pub mod params;
 pub mod session;
 
@@ -111,6 +113,34 @@ impl<'model> LlamaContext<'model> {
                 Ok(())
             }
             Some(error) => Err(EncodeError::from(error)),
+        }
+    }
+
+    /// Installs a backend (on-GPU) sampler for sequence `seq_id`, used for
+    /// on-GPU draft sampling in MTP speculative decoding. Returns `true` if the
+    /// sampler was accepted by the backend.
+    ///
+    /// This is **optional**: CPU top-k draft sampling does not require it. It
+    /// only matters when you want the backend to perform draft sampling itself.
+    ///
+    /// # Ownership and lifetime
+    ///
+    /// The context only **borrows** the sampler's raw pointer; ownership is
+    /// **not** transferred. The `&LlamaSampler` borrow only guards the duration
+    /// of this call — afterwards the context retains the raw pointer, which the
+    /// borrow checker no longer tracks.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep the [`LlamaSampler`] alive — and must not mutate or
+    /// free it — for as long as it remains installed and in use by the context
+    /// (i.e. until it is replaced or the context is dropped). Dropping the
+    /// sampler while it is still installed frees it via the sampler's own `Drop`
+    /// (`llama_sampler_free`), after which a subsequent [`Self::decode`] would
+    /// dereference a freed pointer (use-after-free).
+    pub unsafe fn set_sampler(&mut self, seq_id: i32, sampler: &LlamaSampler) -> bool {
+        unsafe {
+            llama_cpp_sys_2::llama_set_sampler(self.context.as_ptr(), seq_id, sampler.sampler)
         }
     }
 

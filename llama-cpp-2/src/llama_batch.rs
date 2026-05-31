@@ -23,6 +23,15 @@ pub enum BatchAddError {
     /// Empty buffer is provided for [`LlamaBatch::get_one`]
     #[error("Empty buffer")]
     EmptyBuffer,
+    /// The embedding row passed to [`crate::mtp_batch::LlamaMtpBatch::add`] did
+    /// not match the batch's `n_embd`.
+    #[error("Embedding length mismatch: expected {expected}, got {actual}")]
+    EmbdLengthMismatch {
+        /// The `n_embd` the batch was allocated with.
+        expected: usize,
+        /// The length of the embedding row that was passed.
+        actual: usize,
+    },
 }
 
 impl LlamaBatch {

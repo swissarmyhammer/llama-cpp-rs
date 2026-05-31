@@ -29,6 +29,7 @@ mod log;
 pub mod model;
 #[cfg(feature = "mtmd")]
 pub mod mtmd;
+pub mod mtp_batch;
 pub mod sampling;
 pub mod timing;
 pub mod token;
