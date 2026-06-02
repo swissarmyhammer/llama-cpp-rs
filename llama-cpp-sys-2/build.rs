@@ -197,6 +197,74 @@ fn is_hidden(e: &DirEntry) -> bool {
         .unwrap_or_default()
 }
 
+/// Apply small in-tree fixes to the vendored llama.cpp submodule before it is
+/// compiled.
+///
+/// The submodule tracks upstream ggml-org/llama.cpp, which we cannot push to, so
+/// these surgical edits live here and are re-applied to whatever checkout the
+/// build sees (a fresh `~/.cargo` git checkout in CI, or the working tree
+/// locally). Each patch is idempotent: it matches the pristine upstream text and
+/// no-ops once applied, so repeated builds are safe and a future submodule bump
+/// that changes the text simply logs a warning instead of failing.
+fn apply_local_patches(llama_src: &Path) {
+    // Metal residency-set teardown: upstream hard-asserts the collection is empty
+    // when the device is freed. An embedder can tear the backend down (process
+    // exit, or a worker thread whose buffers' destructors have not run yet)
+    // before every buffer has been removed, aborting the whole process over what
+    // the OS reclaims anyway. Drain the stragglers instead of asserting.
+    const METAL_DEVICE: &str = "ggml/src/ggml-metal/ggml-metal-device.m";
+    const RSETS_FREE_UPSTREAM: &str = "\
+    // note: if you hit this assert, most likely you haven't deallocated all Metal resources before exiting
+    GGML_ASSERT([rsets->data count] == 0);
+
+    atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
+
+    dispatch_group_wait(rsets->d_group, DISPATCH_TIME_FOREVER);
+    dispatch_release(rsets->d_group);
+
+    [rsets->data release];";
+    const RSETS_FREE_PATCHED: &str = "\
+    // Stop the background heartbeat thread first so it is not iterating the
+    // collection while we tear it down.
+    atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
+
+    dispatch_group_wait(rsets->d_group, DISPATCH_TIME_FOREVER);
+    dispatch_release(rsets->d_group);
+
+    // The owning device is being destroyed, so any residency sets still
+    // registered reference Metal resources that die with the device. An embedder
+    // can tear the backend down before every buffer has been removed from this
+    // collection (process exit, or a worker thread whose destructors have not
+    // run yet) — not a leak worth aborting the process over. Drain the
+    // stragglers instead of GGML_ASSERT([rsets->data count] == 0).
+    [rsets->lock lock];
+    [rsets->data removeAllObjects];
+    [rsets->lock unlock];
+
+    [rsets->data release];";
+
+    let path = llama_src.join(METAL_DEVICE);
+    let Ok(src) = std::fs::read_to_string(&path) else {
+        // The file only exists once the submodule is checked out; if it is not
+        // there yet there is nothing to patch.
+        return;
+    };
+    if src.contains("[rsets->data removeAllObjects]") {
+        debug_log!("residency-set teardown patch already applied");
+        return;
+    }
+    if !src.contains(RSETS_FREE_UPSTREAM) {
+        println!(
+            "cargo:warning=llama.cpp residency-set teardown patch did not match \
+             (submodule text changed?) — skipping {METAL_DEVICE}"
+        );
+        return;
+    }
+    let patched = src.replace(RSETS_FREE_UPSTREAM, RSETS_FREE_PATCHED);
+    std::fs::write(&path, patched).expect("failed to write residency-set teardown patch");
+    println!("cargo:warning=applied llama.cpp Metal residency-set teardown patch");
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -207,6 +275,11 @@ fn main() {
     let target_dir = get_cargo_target_dir().unwrap();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Failed to get CARGO_MANIFEST_DIR");
     let llama_src = Path::new(&manifest_dir).join("llama.cpp");
+
+    // Re-apply our in-tree fixes to the vendored submodule before configuring
+    // the cmake build (idempotent; see the function for rationale).
+    apply_local_patches(&llama_src);
+
     let build_shared_libs = cfg!(feature = "dynamic-link");
 
     let build_shared_libs = std::env::var("LLAMA_BUILD_SHARED_LIBS")
