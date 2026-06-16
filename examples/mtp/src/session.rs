@@ -77,8 +77,8 @@ pub struct VerifyOutcome {
 
 /// Per-sequence state carried across MTP generation steps.
 ///
-/// `pending_h` is the pre-norm hidden row that pairs with the *next* token fed
-/// to the MTP head; `verify_h`/`n_rows` hold the target pre-norm rows captured
+/// `pending_h` is the nextn hidden row that pairs with the *next* token fed
+/// to the MTP head; `verify_h`/`n_rows` hold the target nextn rows captured
 /// during the most recent verification decode.
 ///
 /// These fields are written by [`MtpSession::new`] and read/updated by
@@ -87,9 +87,9 @@ pub struct VerifyOutcome {
 pub struct MtpSession {
     /// Model embedding dimension; the row width of `pending_h` and `verify_h`.
     pub(crate) n_embd: usize,
-    /// Pre-norm hidden row (len `n_embd`) awaiting the next token.
+    /// Nextn hidden row (len `n_embd`) awaiting the next token.
     pub(crate) pending_h: Vec<f32>,
-    /// Target pre-norm rows from the last verify decode (`n_rows * n_embd`).
+    /// Target nextn rows from the last verify decode (`n_rows * n_embd`).
     pub(crate) verify_h: Vec<f32>,
     /// Number of rows currently held in `verify_h`.
     pub(crate) n_rows: usize,
@@ -117,14 +117,14 @@ impl MtpSession {
         }
     }
 
-    /// Capture the target's pre-norm rows and mirror the accepted tokens onto
+    /// Capture the target's nextn rows and mirror the accepted tokens onto
     /// the draft context (reference `process()`).
     ///
     /// Call this after a target `decode` of `n` sequential positions
     /// (`batch_tokens[k]` at `batch_positions[k]`, all on `seq_id`). It does two
     /// things:
     ///
-    /// 1. **Capture** — copies the target's pre-norm row for each of the `n`
+    /// 1. **Capture** — copies the target's nextn row for each of the `n`
     ///    decoded positions into `verify_h`, sets `n_rows = n`, and carries the
     ///    last row forward as `pending_h` (it pairs with the *next* token fed to
     ///    the MTP head).
@@ -141,7 +141,7 @@ impl MtpSession {
     /// state advanced to match the target, not draft logits, here.
     ///
     /// # Parameters
-    /// - `target`: the target context whose pre-norm rows were just produced.
+    /// - `target`: the target context whose nextn rows were just produced.
     /// - `draft`: the draft (MTP) context to advance in lockstep.
     /// - `batch_tokens`: the `n` tokens the target decoded, in order.
     /// - `batch_positions`: their positions (same length as `batch_tokens`).
@@ -172,15 +172,15 @@ impl MtpSession {
         // overwrites pending_h with the freshly captured last row.
         let carry = self.pending_h.clone();
 
-        // Step 1: capture the target's pre-norm rows into verify_h.
+        // Step 1: capture the target's nextn rows into verify_h.
         self.n_rows = n;
         self.verify_h.resize(n * self.n_embd, 0.0);
         for i in 0..n {
             let row = target
-                .get_embeddings_pre_norm_ith(
+                .get_embeddings_nextn_ith(
                     i32::try_from(i).expect("row index does not fit into i32"),
                 )
-                .expect("target produced no pre-norm row for a verified position");
+                .expect("target produced no nextn row for a verified position");
             self.verify_h[i * self.n_embd..(i + 1) * self.n_embd].copy_from_slice(row);
         }
         // The last captured row pairs with the next token (cross-call carryover).
@@ -211,7 +211,7 @@ impl MtpSession {
     /// Greedy CPU drafting on a single sequence. Each drafted token `k + 1` is
     /// produced from `(token_k, h_k)`: the seed pairs `id_last` with the carried
     /// `pending_h`, and every subsequent step pairs the just-sampled token with
-    /// the pre-norm row the draft produced for it. This is the same h-pairing
+    /// the nextn row the draft produced for it. This is the same h-pairing
     /// invariant `sync_capture` mirrors, run forward speculatively.
     ///
     /// Each step keeps the top-1 candidate from a top-k `params.top_k` filter
@@ -232,7 +232,7 @@ impl MtpSession {
     /// # Panics
     ///
     /// Panics if the draft length does not fit into an [`i32`], or if a logits
-    /// position yields no candidates or pre-norm row (an internal invariant
+    /// position yields no candidates or nextn row (an internal invariant
     /// broken only by a backend fault).
     #[must_use]
     pub fn draft(
@@ -269,10 +269,10 @@ impl MtpSession {
             }
 
             // h_k for the token we are about to keep, read before the next decode
-            // invalidates the draft's pre-norm buffer.
+            // invalidates the draft's nextn buffer.
             let h_row = draft
-                .get_embeddings_pre_norm_ith(i_batch)
-                .expect("draft produced no pre-norm row for a logits position")
+                .get_embeddings_nextn_ith(i_batch)
+                .expect("draft produced no nextn row for a logits position")
                 .to_vec();
 
             result.push(top1);
@@ -403,7 +403,7 @@ impl MtpSession {
     }
 
     /// Accept the verified prefix: roll the target KV back to the accepted
-    /// frontier and carry the matching pre-norm row forward (reference
+    /// frontier and carry the matching nextn row forward (reference
     /// `accept()`).
     ///
     /// Two effects:
@@ -417,7 +417,7 @@ impl MtpSession {
     ///    drafts, and the guaranteed `next_token` (which `verify` decoded at
     ///    `next_pos - 1`) and drops only the rejected drafts, so the next decode
     ///    resumes at `next_pos`.
-    /// 2. **Carry** — sets `pending_h` to the target's pre-norm row for the last
+    /// 2. **Carry** — sets `pending_h` to the target's nextn row for the last
     ///    accepted token, picked by [`accept_h_index`] (mirrors the reference
     ///    `accept()` row choice, clamped to the captured rows).
     ///
@@ -455,7 +455,7 @@ impl MtpSession {
             .clear_kv_cache_seq(Some(seq), Some(pos), None)
             .context("target KV rollback to accepted frontier failed")?;
 
-        // Carry the pre-norm row for the last accepted token forward. In the
+        // Carry the nextn row for the last accepted token forward. In the
         // single-sequence self-driven `mtp_generate` loop this write is
         // immediately superseded by the following `sync_capture`, which re-mirrors
         // and overwrites `pending_h`; this carry is the authoritative h only for

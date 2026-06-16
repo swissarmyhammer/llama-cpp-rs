@@ -1,5 +1,5 @@
 //! Gated integration test for the MTP (Multi-Token Prediction) binding
-//! surface: target/draft contexts, pre-norm accessors, [`LlamaMtpBatch`], and
+//! surface: target/draft contexts, nextn accessors, [`LlamaMtpBatch`], and
 //! [`LlamaContext::decode_mtp`].
 //!
 //! Needs a real Qwen3.6 MTP GGUF and is therefore `#[ignore]`d by default. Set
@@ -14,7 +14,7 @@
 //! `cargo test -p llama-cpp-2` stays green.
 //!
 //! Scope: this asserts only the binding round-trip — an MTP context loads
-//! without the missing-MTP-layers warning, a pre-norm row has length `n_embd`
+//! without the missing-MTP-layers warning, a nextn row has length `n_embd`
 //! with all-finite values, and the draft proposes at least one token. The
 //! broader end-to-end equivalence check (greedy-with-mtp == greedy-without,
 //! acceptance rate > 0) is a consumer concern and lives in `swissarmyhammer`'s
@@ -68,11 +68,11 @@ fn mtp_draft_context_round_trip() {
 
     let n_embd = usize::try_from(model.n_embd()).expect("n_embd does not fit into a usize");
 
-    // Target context: standard graph, pre-norm enabled for all tokens.
+    // Target context: standard graph, nextn enabled for all tokens.
     let mut target = model
         .new_context(&backend, LlamaContextParams::default())
         .expect("failed to create target context");
-    target.set_embeddings_pre_norm(true, false);
+    target.set_embeddings_nextn(true, false);
 
     // Install a capturing log sink so we can assert the missing-MTP-layers
     // warning is absent while the MTP context is created. Cleared first in case
@@ -103,9 +103,9 @@ fn mtp_draft_context_round_trip() {
          the model at LLAMA_MTP_MODEL does not contain MTP layers.\nlogs:\n{logged}"
     );
 
-    draft.set_embeddings_pre_norm(true, true);
+    draft.set_embeddings_nextn(true, true);
 
-    // Decode a prompt on the target, requesting logits/pre-norm for the last
+    // Decode a prompt on the target, requesting logits/nextn for the last
     // token.
     let tokens = model
         .str_to_token("The quick brown fox", AddBos::Always)
@@ -120,27 +120,27 @@ fn mtp_draft_context_round_trip() {
     }
     target.decode(&mut batch).expect("target decode failed");
 
-    // The pre-norm row must have length n_embd and be all-finite.
-    let pre_norm = target
-        .get_embeddings_pre_norm_ith(last_index)
-        .expect("target produced no pre-norm row for the last token");
+    // The nextn row must have length n_embd and be all-finite.
+    let nextn = target
+        .get_embeddings_nextn_ith(last_index)
+        .expect("target produced no nextn row for the last token");
     assert_eq!(
-        pre_norm.len(),
+        nextn.len(),
         n_embd,
-        "pre-norm row length should equal model n_embd"
+        "nextn row length should equal model n_embd"
     );
     assert!(
-        pre_norm.iter().all(|f| f.is_finite()),
-        "every pre-norm value must be finite"
+        nextn.iter().all(|f| f.is_finite()),
+        "every nextn value must be finite"
     );
-    let pre_norm_row = pre_norm.to_vec();
+    let nextn_row = nextn.to_vec();
 
     let last_token = *tokens.last().expect("prompt must have at least one token");
 
-    // Carry (token, pre-norm row) into the MTP batch and decode on the draft.
+    // Carry (token, nextn row) into the MTP batch and decode on the draft.
     let mut mtp_batch = LlamaMtpBatch::new(1, n_embd);
     mtp_batch
-        .add(last_token, &pre_norm_row, last_index, 0, true)
+        .add(last_token, &nextn_row, last_index, 0, true)
         .expect("failed to fill the MTP batch");
     draft
         .decode_mtp(&mut mtp_batch)

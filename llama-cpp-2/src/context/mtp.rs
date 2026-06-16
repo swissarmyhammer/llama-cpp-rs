@@ -1,9 +1,12 @@
-//! Accessors for the MTP (multi-token-prediction) pre-norm hidden state.
+//! Accessors for the MTP (multi-token-prediction) `nextn` hidden state.
 //!
-//! The MTP head consumes the hidden state of the final transformer layer
-//! *before* the final RMS norm is applied. These accessors expose that row from
-//! the safe [`LlamaContext`], mirroring the existing `embeddings_ith` /
-//! `embeddings_seq_ith` accessors.
+//! The model's MTP / NextN head consumes a per-position hidden-state row that
+//! the backend exposes separately from the normal embeddings output. These
+//! accessors surface that row from the safe [`LlamaContext`], mirroring the
+//! existing `embeddings_ith` / `embeddings_seq_ith` accessors and wrapping the
+//! upstream `llama_*_embeddings_nextn` API. (Upstream previously exposed this as
+//! a pre-norm hidden state; as of the qwen35 MTP change (#24025) it is the
+//! post-norm `nextn` row — same access pattern, renamed surface.)
 
 use std::num::NonZeroI32;
 use std::slice;
@@ -12,11 +15,11 @@ use crate::context::LlamaContext;
 use crate::mtp_batch::LlamaMtpBatch;
 use crate::DecodeError;
 
-/// Turn a raw pre-norm hidden-state pointer returned by the backend into a safe
+/// Turn a raw nextn hidden-state pointer returned by the backend into a safe
 /// slice, guarding against the null pointer the backend returns when no row was
 /// produced.
 ///
-/// Returns `None` when `ptr` is null (pre-norm disabled, or no decode produced
+/// Returns `None` when `ptr` is null (nextn disabled, or no decode produced
 /// the requested row); otherwise a slice of `n_embd` elements.
 ///
 /// # Safety
@@ -25,7 +28,7 @@ use crate::DecodeError;
 /// values that stay valid for the chosen lifetime `'a`. Callers bind `'a` to
 /// `&self` so the slice cannot outlive the context; the backend invalidates the
 /// buffer on the next `decode`.
-unsafe fn pre_norm_slice<'a>(ptr: *const f32, n_embd: usize) -> Option<&'a [f32]> {
+unsafe fn nextn_slice<'a>(ptr: *const f32, n_embd: usize) -> Option<&'a [f32]> {
     if ptr.is_null() {
         None
     } else {
@@ -38,7 +41,7 @@ impl LlamaContext<'_> {
     /// Prediction draft generation.
     ///
     /// This mirrors [`Self::decode`] but submits a batch that carries both
-    /// token ids and per-position pre-norm embedding rows, as required by the
+    /// token ids and per-position nextn embedding rows, as required by the
     /// model's MTP/NextN head. It is intended for a context created with
     /// [`LlamaContextType::Mtp`](crate::context::params::LlamaContextType::Mtp).
     /// After a successful decode, read the proposed draft logits with
@@ -65,24 +68,24 @@ impl LlamaContext<'_> {
         }
     }
 
-    /// Enable or disable pre-norm hidden-state output.
+    /// Enable or disable nextn hidden-state output.
     ///
     /// `masked == true` outputs rows only for tokens with `batch.logits != 0`;
-    /// `false` outputs all tokens. Wraps `llama_set_embeddings_pre_norm`.
-    pub fn set_embeddings_pre_norm(&mut self, enabled: bool, masked: bool) {
+    /// `false` outputs all tokens. Wraps `llama_set_embeddings_nextn`.
+    pub fn set_embeddings_nextn(&mut self, enabled: bool, masked: bool) {
         unsafe {
-            llama_cpp_sys_2::llama_set_embeddings_pre_norm(self.context.as_ptr(), enabled, masked);
+            llama_cpp_sys_2::llama_set_embeddings_nextn(self.context.as_ptr(), enabled, masked);
         }
     }
 
-    /// Get the pre-norm hidden state for output `i` in the current context.
+    /// Get the nextn hidden state for output `i` in the current context.
     ///
     /// # Returns
     ///
     /// A slice of length `n_embd` (the context model's embedding dimension), or
-    /// `None` if the backend produced no row for `i` — pre-norm output was not
+    /// `None` if the backend produced no row for `i` — nextn output was not
     /// enabled, or no decode produced this row. Wraps
-    /// `llama_get_embeddings_pre_norm_ith`.
+    /// `llama_get_embeddings_nextn_ith`.
     ///
     /// The returned slice borrows from the context and is invalidated by the
     /// next `decode`.
@@ -91,23 +94,23 @@ impl LlamaContext<'_> {
     ///
     /// * `n_embd` does not fit into a usize
     #[must_use]
-    pub fn get_embeddings_pre_norm_ith(&self, i: i32) -> Option<&[f32]> {
+    pub fn get_embeddings_nextn_ith(&self, i: i32) -> Option<&[f32]> {
         let n_embd =
             usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
 
         unsafe {
-            let ptr = llama_cpp_sys_2::llama_get_embeddings_pre_norm_ith(self.context.as_ptr(), i);
-            pre_norm_slice(ptr, n_embd)
+            let ptr = llama_cpp_sys_2::llama_get_embeddings_nextn_ith(self.context.as_ptr(), i);
+            nextn_slice(ptr, n_embd)
         }
     }
 
-    /// Get the pre-norm hidden state for the whole batch in the current context.
+    /// Get the nextn hidden state for the whole batch in the current context.
     ///
     /// # Returns
     ///
     /// A slice of length `n_embd` (the context model's embedding dimension), or
-    /// `None` if the backend produced no rows — pre-norm output was not enabled,
-    /// or no decode has run. Wraps `llama_get_embeddings_pre_norm`.
+    /// `None` if the backend produced no rows — nextn output was not enabled,
+    /// or no decode has run. Wraps `llama_get_embeddings_nextn`.
     ///
     /// The returned slice borrows from the context and is invalidated by the
     /// next `decode`.
@@ -116,35 +119,35 @@ impl LlamaContext<'_> {
     ///
     /// * `n_embd` does not fit into a usize
     #[must_use]
-    pub fn get_embeddings_pre_norm(&self) -> Option<&[f32]> {
+    pub fn get_embeddings_nextn(&self) -> Option<&[f32]> {
         let n_embd =
             usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
 
         unsafe {
-            let ptr = llama_cpp_sys_2::llama_get_embeddings_pre_norm(self.context.as_ptr());
-            pre_norm_slice(ptr, n_embd)
+            let ptr = llama_cpp_sys_2::llama_get_embeddings_nextn(self.context.as_ptr());
+            nextn_slice(ptr, n_embd)
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::pre_norm_slice;
+    use super::nextn_slice;
 
     #[test]
     fn null_pointer_yields_none() {
-        // The backend returns a null pointer when pre-norm output was never
-        // produced (pre-norm disabled, or no decode produced this row). The
+        // The backend returns a null pointer when nextn output was never
+        // produced (nextn disabled, or no decode produced this row). The
         // guard must surface that as `None` rather than reading a dangling
         // pointer.
-        let slice = unsafe { pre_norm_slice(std::ptr::null(), 4) };
+        let slice = unsafe { nextn_slice(std::ptr::null(), 4) };
         assert!(slice.is_none());
     }
 
     #[test]
     fn non_null_pointer_yields_slice_of_n_embd() {
         let buf = [1.0_f32, 2.0, 3.0, 4.0];
-        let slice = unsafe { pre_norm_slice(buf.as_ptr(), buf.len()) };
+        let slice = unsafe { nextn_slice(buf.as_ptr(), buf.len()) };
         assert_eq!(slice, Some(&buf[..]));
     }
 }

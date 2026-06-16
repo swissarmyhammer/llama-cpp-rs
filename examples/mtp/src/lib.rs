@@ -42,16 +42,16 @@ const SEQ_ID: i32 = 0;
 pub struct RoundTrip {
     /// The last prompt token, carried into the draft (MTP) batch.
     pub seed_token: LlamaToken,
-    /// The observed length of the target's pre-norm hidden-state row.
-    pub pre_norm_len: usize,
+    /// The observed length of the target's nextn hidden-state row.
+    pub nextn_len: usize,
     /// The token(s) the draft (MTP) context proposed.
     pub drafted: Vec<LlamaToken>,
 }
 
 /// Run one MTP draft round-trip.
 ///
-/// Decodes `prompt` on a fresh target context, reads the target's pre-norm
-/// hidden state for the last prompt token, carries `(token, pre_norm_row)` into
+/// Decodes `prompt` on a fresh target context, reads the target's nextn
+/// hidden state for the last prompt token, carries `(token, nextn_row)` into
 /// a [`LlamaMtpBatch`], decodes that on a draft (MTP) context, and greedily
 /// reads back the proposed token from the draft's logits.
 ///
@@ -59,11 +59,11 @@ pub struct RoundTrip {
 /// - `backend`: the initialized llama backend.
 /// - `model`: the loaded model; both contexts share it.
 /// - `prompt`: the text fed to the target context.
-/// - `n_embd`: the model's embedding dimension (the pre-norm row width).
+/// - `n_embd`: the model's embedding dimension (the nextn row width).
 ///
 /// # Errors
 /// Returns an error if either context fails to create, tokenization fails, a
-/// decode fails, the target produces no pre-norm row, or the draft produces no
+/// decode fails, the target produces no nextn row, or the draft produces no
 /// candidates.
 ///
 /// # Panics
@@ -75,13 +75,13 @@ pub fn run_round_trip(
     prompt: &str,
     n_embd: usize,
 ) -> Result<RoundTrip> {
-    // Target context: standard graph, pre-norm enabled for all tokens.
+    // Target context: standard graph, nextn enabled for all tokens.
     let mut target = model
         .new_context(backend, LlamaContextParams::default())
         .with_context(|| "unable to create the target llama_context")?;
-    target.set_embeddings_pre_norm(true, false);
+    target.set_embeddings_nextn(true, false);
 
-    // Draft context: runs the model's MTP/NextN head; pre-norm masked to the
+    // Draft context: runs the model's MTP/NextN head; nextn masked to the
     // tokens whose logits were requested.
     let mut draft = model
         .new_context(
@@ -89,9 +89,9 @@ pub fn run_round_trip(
             LlamaContextParams::default().with_ctx_type(LlamaContextType::Mtp),
         )
         .with_context(|| "unable to create the draft (MTP) llama_context")?;
-    draft.set_embeddings_pre_norm(true, true);
+    draft.set_embeddings_nextn(true, true);
 
-    // Decode the prompt on the target, requesting logits/pre-norm for the
+    // Decode the prompt on the target, requesting logits/nextn for the
     // final token.
     let tokens = model
         .str_to_token(prompt, AddBos::Always)
@@ -106,21 +106,21 @@ pub fn run_round_trip(
         .decode(&mut batch)
         .with_context(|| "target decode failed")?;
 
-    // Read the pre-norm hidden state row the MTP head consumes.
-    let pre_norm = target
-        .get_embeddings_pre_norm_ith(last_index)
-        .with_context(|| "target produced no pre-norm row for the last token")?;
-    let pre_norm_len = pre_norm.len();
-    let pre_norm_row = pre_norm.to_vec();
+    // Read the nextn hidden state row the MTP head consumes.
+    let nextn = target
+        .get_embeddings_nextn_ith(last_index)
+        .with_context(|| "target produced no nextn row for the last token")?;
+    let nextn_len = nextn.len();
+    let nextn_row = nextn.to_vec();
 
     let seed_token = *tokens
         .last()
         .expect("prompt must contain at least one token");
 
-    // Carry (token, pre-norm row) into the MTP batch and decode on the draft.
+    // Carry (token, nextn row) into the MTP batch and decode on the draft.
     let mut mtp_batch = LlamaMtpBatch::new(1, n_embd);
     mtp_batch
-        .add(seed_token, &pre_norm_row, last_index, 0, true)
+        .add(seed_token, &nextn_row, last_index, 0, true)
         .with_context(|| "failed to fill the MTP batch")?;
     draft
         .decode_mtp(&mut mtp_batch)
@@ -136,7 +136,7 @@ pub fn run_round_trip(
 
     Ok(RoundTrip {
         seed_token,
-        pre_norm_len,
+        nextn_len,
         drafted: vec![proposed],
     })
 }
@@ -161,8 +161,8 @@ pub struct GenerateOutput {
 /// Create the target and draft (MTP) contexts for a generation session.
 ///
 /// Both contexts share `model`. The target runs the standard graph with
-/// unmasked pre-norm (rows for every decoded position); the draft runs the
-/// MTP/NextN head with masked pre-norm (rows only where logits were requested).
+/// unmasked nextn (rows for every decoded position); the draft runs the
+/// MTP/NextN head with masked nextn (rows only where logits were requested).
 /// This mirrors the setup in `mtp-orchestration.md`.
 ///
 /// # Errors
@@ -174,7 +174,7 @@ fn setup_contexts<'a>(
     let mut target = model
         .new_context(backend, LlamaContextParams::default())
         .with_context(|| "unable to create the target llama_context")?;
-    target.set_embeddings_pre_norm(true, false);
+    target.set_embeddings_nextn(true, false);
 
     let mut draft = model
         .new_context(
@@ -182,7 +182,7 @@ fn setup_contexts<'a>(
             LlamaContextParams::default().with_ctx_type(LlamaContextType::Mtp),
         )
         .with_context(|| "unable to create the draft (MTP) llama_context")?;
-    draft.set_embeddings_pre_norm(true, true);
+    draft.set_embeddings_nextn(true, true);
 
     Ok((target, draft))
 }
@@ -204,7 +204,7 @@ fn target_greedy(target: &LlamaContext, i_batch: i32) -> LlamaToken {
 /// Decode the prompt on the target and mirror it onto the draft, returning the
 /// first sampled target token and the position it will occupy.
 ///
-/// Decodes the whole tokenized prompt on the target requesting logits/pre-norm
+/// Decodes the whole tokenized prompt on the target requesting logits/nextn
 /// on **every** position (so the draft's recurrent state is mirrored across the
 /// full prompt — the reference `begin()` `pos_max` check), runs `sync_capture`
 /// over the prompt positions, and greedily samples the first generated token
@@ -233,7 +233,7 @@ fn prefill(
     assert!(!tokens.is_empty(), "prompt must contain at least one token");
     let positions = sequential_positions(0, tokens.len());
 
-    // Logits/pre-norm on every position so sync_capture can mirror the whole
+    // Logits/nextn on every position so sync_capture can mirror the whole
     // prompt onto the draft before the first draft() (reference begin()).
     let mut batch = LlamaBatch::new(tokens.len(), 1);
     for (&token, &pos) in tokens.iter().zip(positions.iter()) {
@@ -270,7 +270,7 @@ fn prefill(
 ///
 /// In **both** the verify and the empty-draft fallback paths the step ends by
 /// `sync_capture`ing the canonical committed tokens (`id_last` followed by any
-/// accepted drafts) onto the draft: this captures the target's pre-norm rows
+/// accepted drafts) onto the draft: this captures the target's nextn rows
 /// into `verify_h`, re-mirrors the draft's recurrent state, and leaves
 /// `pending_h` as the row of the last committed token — exactly the `h` the
 /// next draft seed pairs with the next token (the h-pairing invariant that an
@@ -385,7 +385,7 @@ pub fn mtp_generate(
 /// path: `id_last` is decoded into the target KV at `n_past` (advancing it
 /// through `n_past`), and the returned token is the target's argmax at that
 /// position — the token that will occupy `n_past + 1`. The caller then
-/// `sync_capture`s `[id_last]` to capture its pre-norm row and carry it as
+/// `sync_capture`s `[id_last]` to capture its nextn row and carry it as
 /// `pending_h`.
 ///
 /// # Errors

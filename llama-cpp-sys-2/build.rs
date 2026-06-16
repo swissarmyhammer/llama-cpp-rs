@@ -336,7 +336,7 @@ fn main() {
     // Bindings
     //
     // Clang args shared by every bindgen pass (the main C pass and the
-    // C++-mode pre-norm pass below). Both passes parse headers from the same
+    // C++-mode nextn pass below). Both passes parse headers from the same
     // llama.cpp tree, so they must see the same include paths and — on
     // Android/cross builds — the same `--sysroot`/`--target`/NDK `-isystem`
     // configuration, or they would parse against mismatched headers and ABIs.
@@ -472,7 +472,7 @@ fn main() {
         };
 
         // Configure bindgen for Android. These args are pushed onto the
-        // shared list so the pre-norm C++ pass picks up the same cross-compile
+        // shared list so the nextn C++ pass picks up the same cross-compile
         // sysroot/target/include configuration as the main pass. The main
         // builder already received the base include args at construction, so
         // only the args appended below are applied to it here.
@@ -517,15 +517,15 @@ fn main() {
         .write_to_file(bindings_path)
         .expect("Failed to write bindings");
 
-    // Second bindgen pass, in C++ mode, for the pre-norm shim.
+    // Second bindgen pass, in C++ mode, for the nextn shim.
     //
-    // The pre-norm functions are declared in `llama-ext.h` WITHOUT an
+    // The nextn functions are declared in `llama-ext.h` WITHOUT an
     // `extern "C"` block, so they are compiled into libllama with C++
     // (mangled) linkage. A normal C-mode binding would emit an `extern "C"`
     // FFI declaration that cannot resolve against the mangled symbol at link
     // time. Parsing `wrapper_ext.h` as C++ makes bindgen emit the correct
     // mangled `#[link_name = "..."]`, so the canonical Rust names
-    // (`llama_set_embeddings_pre_norm`, etc.) link against the existing C++
+    // (`llama_set_embeddings_nextn`, etc.) link against the existing C++
     // symbols. `allowlist_recursively(false)` keeps this pass from re-emitting
     // `llama_context` and other shared types — those come from `bindings.rs`,
     // which is included first in lib.rs.
@@ -534,16 +534,16 @@ fn main() {
         .clang_args(&shared_clang_args)
         .clang_arg("-x")
         .clang_arg("c++")
-        .allowlist_function("llama_(set|get)_embeddings_pre_norm.*")
+        .allowlist_function("llama_(set|get)_embeddings_nextn.*")
         .allowlist_recursively(false)
         .prepend_enum_name(false)
         .generate()
-        .expect("Failed to generate pre-norm ext bindings");
+        .expect("Failed to generate nextn ext bindings");
 
     let ext_bindings_path = out_dir.join("bindings_ext.rs");
     ext_bindings
         .write_to_file(ext_bindings_path)
-        .expect("Failed to write pre-norm ext bindings");
+        .expect("Failed to write nextn ext bindings");
 
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=wrapper_ext.h");

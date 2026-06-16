@@ -30,14 +30,14 @@ C API in `llama-cpp-sys-2/llama.cpp/include/llama.h`:
 - `llama_get_embeddings_ith` / `_seq` (lines ~1016/1022).
 
 Fork extension header `llama-cpp-sys-2/llama.cpp/src/llama-ext.h` (NOT upstream `llama.h`):
-- `void llama_set_embeddings_pre_norm(struct llama_context * ctx, bool value, bool masked);` (line 113)
-- `float * llama_get_embeddings_pre_norm(struct llama_context * ctx);` (line 117)
-- `float * llama_get_embeddings_pre_norm_ith(struct llama_context * ctx, int32_t i);` (line 120)
+- `void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);` (line 113)
+- `float * llama_get_embeddings_nextn(struct llama_context * ctx);` (line 117)
+- `float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);` (line 120)
 
 The `draft-mtp` impl (`common/speculative.cpp`, struct `common_speculative_impl_draft_mtp`)
 uses exactly this set of C calls (the binding surface we must cover): `llama_batch_init`,
-`llama_batch_free`, `llama_decode`, `llama_get_embeddings_pre_norm`,
-`llama_get_embeddings_pre_norm_ith`, `llama_set_embeddings_pre_norm`,
+`llama_batch_free`, `llama_decode`, `llama_get_embeddings_nextn`,
+`llama_get_embeddings_nextn_ith`, `llama_set_embeddings_nextn`,
 `llama_set_sampler`, `llama_get_memory`, `llama_memory_seq_pos_max`,
 `llama_model_n_embd`, `llama_n_batch`, `llama_get_model`,
 `llama_sampler_chain_init/add/default_params`, `llama_sampler_init_top_k`,
@@ -47,8 +47,8 @@ uses exactly this set of C calls (the binding surface we must cover): `llama_bat
 
 1. **`llama-ext.h` is not bound.** `llama-cpp-sys-2/wrapper.h` contains only
    `#include "llama.cpp/include/llama.h"`. bindgen's `llama_.*` allowlist would
-   pick up the pre-norm functions, but the header is never included, so
-   `llama_set_embeddings_pre_norm` / `llama_get_embeddings_pre_norm[_ith]` are
+   pick up the nextn functions, but the header is never included, so
+   `llama_set_embeddings_nextn` / `llama_get_embeddings_nextn[_ith]` are
    absent from the generated FFI. (The symbols ARE compiled into libllama — they
    live in `src/`, part of the library — so only the header/bindgen side is
    missing.)
@@ -59,8 +59,8 @@ uses exactly this set of C calls (the binding surface we must cover): `llama_bat
    token-only batches; MTP hook batches need both `token` and `embd` rows set per
    position. Need a way to construct/fill an embd batch (or a dedicated MTP-batch
    type).
-4. **No pre-norm hidden-state read.** Even once bound, expose a safe accessor
-   returning the pre-norm embedding row(s) as `&[f32]` / `Vec<f32>` (length
+4. **No nextn hidden-state read.** Even once bound, expose a safe accessor
+   returning the nextn embedding row(s) as `&[f32]` / `Vec<f32>` (length
    `n_embd`).
 5. **No `llama_set_sampler` (backend per-seq sampler).** Optional — only needed
    for backend (GPU) draft sampling; the consumer can start with CPU sampling and
@@ -79,7 +79,7 @@ uses exactly this set of C calls (the binding surface we must cover): `llama_bat
   `std::map`-based `llama_memory_breakdown`). bindgen will choke on those. Two
   options:
   - (preferred) add a tiny C-only shim header, e.g. `wrapper_ext.h`, that
-    forward-declares **only** the three `pre_norm` `LLAMA_API` functions (plain
+    forward-declares **only** the three `nextn` `LLAMA_API` functions (plain
     `bool`/`int32_t`/pointer signatures, C-compatible), and `#include` that from
     `wrapper.h`; or
   - include `llama-ext.h` and add bindgen `blocklist_type`/`blocklist_item` for
@@ -103,16 +103,16 @@ pub fn with_ctx_type(mut self, ctx_type: LlamaContextType) -> Self {
 ```
 (Mirror the existing `get_set!`/`with_*` style in that file.)
 
-### 3. Pre-norm embeddings on `LlamaContext`
+### 3. Nextn embeddings on `LlamaContext`
 File: `llama-cpp-2/src/context.rs` (or a new `context/mtp.rs`).
 ```rust
-/// Output pre-norm hidden states (the row the MTP head consumes). `masked` ==
-/// only for tokens with logits != 0. Wraps `llama_set_embeddings_pre_norm`.
-pub fn set_embeddings_pre_norm(&mut self, enabled: bool, masked: bool);
+/// Output nextn hidden states (the row the MTP head consumes). `masked` ==
+/// only for tokens with logits != 0. Wraps `llama_set_embeddings_nextn`.
+pub fn set_embeddings_nextn(&mut self, enabled: bool, masked: bool);
 
-/// Pre-norm hidden state for output `i` as `&[f32]` of len `n_embd`.
-/// Wraps `llama_get_embeddings_pre_norm_ith`; returns None if unavailable.
-pub fn get_embeddings_pre_norm_ith(&self, i: i32) -> Option<&[f32]>;
+/// Nextn hidden state for output `i` as `&[f32]` of len `n_embd`.
+/// Wraps `llama_get_embeddings_nextn_ith`; returns None if unavailable.
+pub fn get_embeddings_nextn_ith(&self, i: i32) -> Option<&[f32]>;
 ```
 Length is `model.n_embd()`. Safety: the pointer is valid until the next decode;
 bound the slice lifetime to `&self` and document the invalidation.
@@ -134,11 +134,11 @@ pattern (it `llama_batch_init`s with `embd=n_embd` then also mallocs `batch.toke
 
 Per generation step, mirroring `common_speculative_impl_draft_mtp`:
 1. Two contexts on one model: target (`Default`) + draft (`with_ctx_type(Mtp)`).
-   Call `set_embeddings_pre_norm(true, masked=false)` on target,
+   Call `set_embeddings_nextn(true, masked=false)` on target,
    `(true, masked=true)` on draft.
-2. Draft: feed (token, pre-norm hidden row carried from the previous target
+2. Draft: feed (token, nextn hidden row carried from the previous target
    verify) as an embd batch → MTP head proposes up to `n_max` draft tokens.
-3. Verify: run the draft tokens through the target in one batch; read pre-norm
+3. Verify: run the draft tokens through the target in one batch; read nextn
    rows; accept the longest matching prefix.
 4. Roll back the draft's recurrent/KV state past rejected drafts; carry the last
    hidden row into the next step.
@@ -147,13 +147,13 @@ target context.
 
 ## Acceptance criteria
 
-- `cargo build`/bindgen emits `llama_set_embeddings_pre_norm`,
-  `llama_get_embeddings_pre_norm`, `llama_get_embeddings_pre_norm_ith` in
+- `cargo build`/bindgen emits `llama_set_embeddings_nextn`,
+  `llama_get_embeddings_nextn`, `llama_get_embeddings_nextn_ith` in
   `llama_cpp_sys_2`.
 - `LlamaContextParams::with_ctx_type(Mtp)` compiles and a Qwen3.6 MTP GGUF loads
   an MTP context without the "context type MTP requested but model doesn't
   contain MTP layers" warning.
-- A round-trip test: draft context proposes tokens; pre-norm rows read back have
+- A round-trip test: draft context proposes tokens; nextn rows read back have
   length `n_embd` and are finite.
 - End-to-end (in the consumer): greedy output with draft-mtp == greedy output
   without it (identical tokens), with measured acceptance > 0 (fewer target

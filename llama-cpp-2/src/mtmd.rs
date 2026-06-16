@@ -443,14 +443,18 @@ impl MtmdBitmap {
     /// This function is thread-safe.
     pub fn from_file(ctx: &MtmdContext, path: &str) -> Result<Self, MtmdBitmapError> {
         let path_cstr = CString::new(path)?;
-        let bitmap = unsafe {
+        // `placeholder = false`: load the real pixel/audio data and compute the
+        // FNV hash ID (the pre-video-support behavior). The returned wrapper also
+        // carries a `video_ctx`, which is null for these image/audio helpers.
+        let wrapper = unsafe {
             llama_cpp_sys_2::mtmd_helper_bitmap_init_from_file(
                 ctx.context.as_ptr(),
                 path_cstr.as_ptr(),
+                false,
             )
         };
 
-        let bitmap = NonNull::new(bitmap).ok_or(MtmdBitmapError::NullResult)?;
+        let bitmap = NonNull::new(wrapper.bitmap).ok_or(MtmdBitmapError::NullResult)?;
         Ok(Self { bitmap })
     }
 
@@ -477,15 +481,18 @@ impl MtmdBitmap {
     ///
     /// This function is thread-safe.
     pub fn from_buffer(ctx: &MtmdContext, data: &[u8]) -> Result<Self, MtmdBitmapError> {
-        let bitmap = unsafe {
+        // `placeholder = false`: load the real data and compute the FNV hash ID.
+        // See `from_file` for the wrapper's `video_ctx` field (null here).
+        let wrapper = unsafe {
             llama_cpp_sys_2::mtmd_helper_bitmap_init_from_buf(
                 ctx.context.as_ptr(),
                 data.as_ptr(),
                 data.len(),
+                false,
             )
         };
 
-        let bitmap = NonNull::new(bitmap).ok_or(MtmdBitmapError::NullResult)?;
+        let bitmap = NonNull::new(wrapper.bitmap).ok_or(MtmdBitmapError::NullResult)?;
         Ok(Self { bitmap })
     }
 

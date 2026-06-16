@@ -2,7 +2,7 @@
 //! Prediction (MTP) speculative drafting.
 //!
 //! The MTP draft hook needs a batch that carries **both** a `token` id and an
-//! `embd` (pre-norm hidden) row for every position. The general-purpose
+//! `embd` (nextn hidden) row for every position. The general-purpose
 //! [`LlamaBatch`](crate::llama_batch::LlamaBatch) is allocated with
 //! `llama_batch_init(n, 0, n_seq_max)` (embd = 0) and only fills token rows, so
 //! a dedicated type is used here rather than overloading it.
